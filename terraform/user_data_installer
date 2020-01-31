@@ -1,0 +1,15 @@
+#cloud-config
+
+write_files:
+- path: /var/tmp/installer.sh
+  permissions: '0755'
+  content: |
+    #!/bin/bash
+    yum install -y epel-release
+    yum install -y java-1.8.0-openjdk-devel
+    mkdir -p /tmp/terraform
+    echo "Terraform Run Completed!" > /tmp/terraform/run.txt
+    
+runcmd:
+- [ sh, /var/tmp/installer.sh ]
+

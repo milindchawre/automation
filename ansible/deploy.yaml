@@ -1,0 +1,9 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    image: "mchawre/spring-petclinic:8"
+  tasks:
+  - name: Run spring-petclinic docker container
+    command: "docker run -itd --restart always -p 8080:8080 {{ image }}"
+    ignore_errors: true

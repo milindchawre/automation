@@ -1,0 +1,37 @@
+#cloud-config
+
+write_files:
+- path: /var/tmp/installer.sh
+  permissions: '0755'
+  content: |
+    #!/bin/bash
+    #java
+    apt-get update
+    apt-get -y install openjdk-8-jre
+    #docker
+    apt-get -y install apt-transport-https ca-certificates curl gnupg-agent software-properties-common
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    apt-key fingerprint 0EBFCD88
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    apt-get update
+    apt-get -y install docker-ce docker-ce-cli containerd.io
+    systemctl enable docker
+    systemctl start docker
+    #jenkins
+    wget -q -O - https://pkg.jenkins.io/debian/jenkins-ci.org.key | sudo apt-key add -
+    sh -c 'echo deb http://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
+    apt-get update
+    apt-get -y install jenkins
+    systemctl enable jenkins
+    systemctl start jenkins
+    #ansible
+    apt-get -y install ansible
+    #python
+    apt-get -y install python
+    ####
+    mkdir -p /tmp/terraform
+    echo "Terraform Run Completed!" > /tmp/terraform/run.txt
+    
+runcmd:
+- [ sh, /var/tmp/installer.sh ]
+
