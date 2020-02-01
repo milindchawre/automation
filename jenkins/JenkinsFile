@@ -1,0 +1,41 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'master', url: 'https://github.com/milindchawre/spring-petclinic'
+            }
+        }
+        stage('Build') {
+            steps {
+                echo 'Starting to build docker image'
+                script {
+                    def image = docker.build("mchawre/spring-petclinic:${env.BUILD_ID}")
+                    docker.withRegistry("https://registry.hub.docker.com", "dockercreds") {
+                        image.push()
+                    }
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                echo 'Testing..'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                git branch: 'master', url: 'https://github.com/milindchawre/automation.git'
+                echo 'Deploying....'
+                sh'''#!/bin/bash
+                export AWS_PROFILE=default
+                cd ansible
+                terraform init -backend-config "encrypt=true" -backend-config "bucket=terrastate2020" -backend-config "dynamodb_table=terraform-lock-dynamo" -backend-config "region=us-east-1" -backend-config "key=test/terraform.tfstate"
+                python generate_inventory.py
+                cat ansible_inventory
+                ansible-playbook -i ansible_inventory -e "image=mchawre/spring-petclinic:8 host_key_checking=False ansible_ssh_private_key_file=/var/lib/jenkins/.ssh/test-us-east-1.pem" deploy.yaml
+                '''
+            }
+        }
+    }
+}
