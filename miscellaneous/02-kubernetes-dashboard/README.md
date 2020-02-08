@@ -128,6 +128,6 @@ token:      eyJhbGciOiJSUzI1NiIsImtpZCI6IldtX3RoMWxzdmVDWTZQQ2hvWWpnc0czVnV4Smlp
 [mchawre@ip-172-29-238-187 k8s]$
 ```
 - Login to kubernetes dashboard with the token retrieved in above step.
-![k8s1](https://github.com/milindchawre/automation/raw/master/miscellaneous/kubernetes-dashboard/images/k8s-dashboard-1.png)
-![k8s2](https://github.com/milindchawre/automation/raw/master/miscellaneous/kubernetes-dashboard/images/k8s-dashboard-2.png)
+![k8s1](https://github.com/milindchawre/automation/raw/master/miscellaneous/02-kubernetes-dashboard/images/k8s-dashboard-1.png)
+![k8s2](https://github.com/milindchawre/automation/raw/master/miscellaneous/02-kubernetes-dashboard/images/k8s-dashboard-2.png)
 
