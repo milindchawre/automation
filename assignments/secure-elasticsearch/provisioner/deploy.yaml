@@ -1,0 +1,49 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    elasticsearch_image: "docker.elastic.co/elasticsearch/elasticsearch:7.6.0"
+    kibana_image: "docker.elastic.co/kibana/kibana:7.6.0"
+  tasks:
+  - name: Install epel-release
+    yum: pkg=epel-release state=installed
+  - name: Install unzip
+    yum: pkg=unzip state=installed
+  - name: Create elastic certs dir
+    file: path=/etc/elastic/certs state=directory mode=0755
+  - name: Copy elastic ssl config file
+    template: src=instance-ssl.j2 dest=/etc/elastic/certs/instance.yml mode="755"
+  - name: Run elasticsearch in standalone mode for creating certificates
+    shell: "docker run --rm --name es-cert -v /etc/elastic/certs:/tmp/ssl -e discovery.type=single-node {{ elasticsearch_image }} /usr/share/elasticsearch/bin/elasticsearch-certutil cert ca --pem --in /tmp/ssl/instance.yml --out /tmp/ssl/certs.zip"
+    when: inventory_hostname in groups['elastic'][0]
+    ignore_errors: true
+  - name: Unzip elasticsearch certs
+    command: "unzip -o /etc/elastic/certs/certs.zip -d /etc/elastic/certs"
+    when: inventory_hostname in groups['elastic'][0]
+  - name: Create elasticenv dir
+    file: path=/etc/elastic/elasticenv state=directory mode=0755
+  - name: Copy ssl env on elastic nodes
+    template: src=ssl.env dest=/etc/elastic/elasticenv/ssl.env mode="755"
+  - name: Run elasticsearch container
+    command: "docker run --restart always -d --net host --name elasticsearch --log-opt tag={% raw %}{{.Name}}{% endraw %} -v /var/log/elasticsearch:/var/log/elasticsearch -v /mnt/elasticdata:/var/data/elasticsearch -v /etc/elastic/certs:/usr/share/elasticsearch/config/certs --env-file /etc/elastic/elasticenv/elastic.env --env-file /etc/elastic/elasticenv/ssl.env -e discovery.type=single-node {{ elasticsearch_image }}"
+    ignore_errors: true
+  - name: Copy elastic-user.sh on elastic node
+    template: src=elastic-user.sh dest=/etc/elastic/elastic-user.sh mode="755"
+  - name: Copy user creation script in elastic container
+    shell: docker cp /etc/elastic/elastic-user.sh elasticsearch:/var/tmp/elastic-user.sh
+  - name: Set kibana user creds
+    shell: docker exec elasticsearch sh /var/tmp/elastic-user.sh
+    ignore_errors: true
+  - name: Create kibana dir
+    file: path=/etc/elastic/kibana state=directory mode=0755
+  - name: Copy kibana env
+    template: src=kibana.env dest=/etc/elastic/kibana/kibana.env mode="755"
+  - name: Run kibana container
+    command: "docker run -it -d -p 5601:5601 --restart always --name kibana --log-opt tag={% raw %}{{.Name}}{% endraw %} -v /etc/elastic/certs:/usr/share/kibana/config/certs --env-file /etc/elastic/kibana/kibana.env {{ kibana_image }}"
+    ignore_errors: true
+  - name: Print elasticsearch and kibana url
+    debug:
+      msg: "{{ item }}"
+    with_items:
+      - "Elasticsearch URL: https://{{ ansible_host }}:9200 [username: test and password: test123]"
+      - "Kibana URL: https://{{ ansible_host }}:5601 [username: test and password: test123]"

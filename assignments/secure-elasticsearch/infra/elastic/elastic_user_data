@@ -1,0 +1,136 @@
+#cloud-config
+
+write_files:
+- path: /var/tmp/sethostname.sh
+  permissions: '0755'
+  content: |
+    #!/bin/sh
+    hostnamectl set-hostname elastic-ec2
+    grep -qF "HOSTNAME=elastic-ec2" /etc/sysconfig/network || echo HOSTNAME=elastic-ec2 | tee -a /etc/sysconfig/network
+    grep -qF "preserve_hostname: true" /etc/cloud/cloud.cfg || echo "preserve_hostname: true" | tee -a /etc/cloud/cloud.cfg
+    #To support re-running cloud-init on system reboot
+    sed -i 's/scripts-user$/\[scripts-user, always\]/' /etc/cloud/cloud.cfg
+
+- path: /var/tmp/elastic_raid0_setup.sh
+  permissions: '0755'
+  content: |
+    #!/bin/bash
+    # Setting up RAID0 for elasticsearch
+    if [[ ! -b /dev/md0 ]]; then
+      yum -y install epel-release
+      yum -y install python-pip
+      pip install awscli
+      yum -y install mdadm
+      instance_type=$(curl -s http://169.254.169.254/latest/meta-data/instance-type)
+      instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+      region=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document|grep region|awk -F\" '{print $4}')
+      if [[ $instance_type =~ "r5a" || $instance_type =~ "t3" || $instance_type =~ "r5" || $instance_type =~ "m5" || $instance_type =~ "c5" ]]; then
+        yum install nvme-cli -y
+        # For /dev/xvdf
+        volume_id=$(aws ec2 describe-volumes --region $region --filters Name=attachment.instance-id,Values=$instance_id Name=attachment.device,Values=/dev/xvdf | python -c 'import json,sys;obj=json.load(sys.stdin);print obj["Volumes"][0]["VolumeId"]' | tr -d -)
+        block_device_xvdf=$(nvme list | awk '{print $1,$2}' | grep $volume_id | awk '{print $1}')
+        # For /dev/xvdg
+        volume_id=$(aws ec2 describe-volumes --region $region --filters Name=attachment.instance-id,Values=$instance_id Name=attachment.device,Values=/dev/xvdg | python -c 'import json,sys;obj=json.load(sys.stdin);print obj["Volumes"][0]["VolumeId"]' | tr -d -)
+        block_device_xvdg=$(nvme list | awk '{print $1,$2}' | grep $volume_id | awk '{print $1}')
+        # For /dev/xvdh
+        volume_id=$(aws ec2 describe-volumes --region $region --filters Name=attachment.instance-id,Values=$instance_id Name=attachment.device,Values=/dev/xvdh | python -c 'import json,sys;obj=json.load(sys.stdin);print obj["Volumes"][0]["VolumeId"]' | tr -d -)
+        block_device_xvdh=$(nvme list | awk '{print $1,$2}' | grep $volume_id | awk '{print $1}')
+        # Creating raid0
+        mdadm --create --verbose /dev/md0 --level=0 --name=ES_RAID0 --raid-devices=3 $block_device_xvdf $block_device_xvdg $block_device_xvdh
+      else
+        mdadm --create --verbose /dev/md0 --level=0 --name=ES_RAID0 --raid-devices=3 /dev/xvdf /dev/xvdg /dev/xvdh
+      fi
+      cat /proc/mdstat
+      mdadm --detail /dev/md0
+      mkfs -t xfs -L ES_RAID0 /dev/md0
+      mdadm --detail --scan | sudo tee -a /etc/mdadm.conf
+      mkdir -p /mnt/elasticdata
+      mount LABEL=ES_RAID0 /mnt/elasticdata
+      chmod og+rwx /mnt/elasticdata
+      chgrp 1000 /mnt/elasticdata
+      grep -qF "/dev/md0 /mnt/elasticdata xfs defaults,noatime,nofail 0 0" /etc/fstab || echo "/dev/md0 /mnt/elasticdata xfs defaults,noatime,nofail 0 0" | tee -a /etc/fstab
+    fi
+
+- path: /var/tmp/setup_docker.sh
+  permissions: '0755'
+  content: |
+    #!/bin/sh
+    yum install -y yum-utils
+    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    yum-config-manager --enable docker-ce-edge
+    yum install -y docker-ce
+    mkdir -p /etc/systemd/system/docker.service.d
+    cat <<EOF >/etc/systemd/system/docker.service.d/docker.conf
+    [Service]
+    ExecStart=
+    ExecStart=/bin/dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375 --bip=172.17.0.1/24 --storage-driver=overlay2 --log-driver=syslog --log-opt tag={{.DaemonName}}/{{.ImageName}}/{{.Name}}/{{.ID}}
+    LimitMEMLOCK=infinity
+    EOF
+    systemctl daemon-reload
+    systemctl enable docker
+    systemctl start docker
+
+- path: /var/tmp/es_system_check.sh
+  permissions: '0755'
+  content: |
+    #!/bin/sh
+    sysctl -w vm.max_map_count=262144
+    grep -qF "vm.max_map_count = 262144" /etc/sysctl.conf || echo "vm.max_map_count = 262144" | tee -a /etc/sysctl.conf
+    grep -qF "session    required   pam_limits.so" /etc/pam.d/sshd || echo "session    required   pam_limits.so" | tee -a /etc/pam.d/sshd
+    ulimit -n 1000000
+    grep -qF "elasticsearch  hard  nofile  1000000" /etc/security/limits.conf || echo "elasticsearch  hard  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "elasticsearch  soft  nofile  1000000" /etc/security/limits.conf || echo "elasticsearch  soft  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "*  hard  nofile  1000000" /etc/security/limits.conf || echo "*  hard  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "*  soft  nofile  1000000" /etc/security/limits.conf || echo "*  soft  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "root  hard  nofile  1000000" /etc/security/limits.conf || echo "root  hard  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "root  soft  nofile  1000000" /etc/security/limits.conf || echo "root  soft  nofile  1000000" | tee -a /etc/security/limits.conf
+    grep -qF "session    required   pam_limits.so" /etc/pam.d/sshd || echo "session    required   pam_limits.so" | tee -a /etc/pam.d/sshd
+    grep -qF "session    required   pam_limits.so" /etc/pam.d/login || echo "session    required   pam_limits.so" | tee -a /etc/pam.d/login
+    echo "MAX_LOCKED_MEMORY=unlimited" > /etc/sysconfig/elasticsearch
+    ulimit -l unlimited
+    grep -qF "elasticsearch  hard  memlock  unlimited" /etc/security/limits.conf || echo "elasticsearch  hard  memlock  unlimited" | tee -a /etc/security/limits.conf
+    grep -qF "elasticsearch  soft  memlock  unlimited" /etc/security/limits.conf || echo "elasticsearch  soft  memlock  unlimited" | tee -a /etc/security/limits.conf
+    grep -qF "*  hard  memlock  unlimited" /etc/security/limits.conf || echo "*  hard  memlock  unlimited" | tee -a /etc/security/limits.conf
+    grep -qF "*  soft  memlock  unlimited" /etc/security/limits.conf || echo "*  soft  memlock  unlimited" | tee -a /etc/security/limits.conf
+    swapoff -a
+    sysctl -w vm.swappiness=0
+    grep -qF "vm.swappiness = 0" /etc/sysctl.conf || echo "vm.swappiness = 0" | tee -a /etc/sysctl.conf
+    ulimit -u 4096
+    grep -qF "elasticsearch  hard  nproc  4096" /etc/security/limits.conf || echo "elasticsearch  hard  nproc  4096" | tee -a /etc/security/limits.conf
+    grep -qF "elasticsearch  soft  nproc  4096" /etc/security/limits.conf || echo "elasticsearch  soft  nproc  4096" | tee -a /etc/security/limits.conf
+    ulimit -f unlimited
+    grep -qF "elasticsearch  hard  fsize  unlimited" /etc/security/limits.conf || echo "elasticsearch  hard  fsize  unlimited" | tee -a /etc/security/limits.conf
+    grep -qF "elasticsearch  soft  fsize  unlimited" /etc/security/limits.conf || echo "elasticsearch  soft  fsize  unlimited" | tee -a /etc/security/limits.conf
+    mkdir -p /var/log/elasticsearch && chmod og+rwx /var/log/elasticsearch && chgrp 1000 /var/log/elasticsearch
+    mkdir -p /var/data/elasticsearch && chmod og+rwx /var/data/elasticsearch && chgrp 1000 /var/data/elasticsearch
+
+- path: /var/tmp/elastic_env.sh
+  permissions: '0755'
+  content: |
+    #!/bin/bash
+    mkdir -p /etc/elastic/elasticenv
+    chmod -R 0755 /etc/elastic/elasticenv
+    cat <<EOF >/etc/elastic/elasticenv/elastic.env
+    cluster.name=myelastic
+    node.name=elastic-ec2
+    node.master=true
+    node.ingest=true
+    node.data=true
+    search.remote.connect=false
+    path.data=/var/data/elasticsearch
+    path.logs=/var/log/elasticsearch
+    network.host=0.0.0.0
+    ES_JAVA_OPTS=-Xms312m -Xmx812m
+    logger.org.elasticsearch.transport=debug
+    xpack.monitoring.collection.enabled=true
+    EOF
+    chmod 755 /etc/elastic/elasticenv/elastic.env
+    fi
+
+runcmd:
+- [ sh, /var/tmp/sethostname.sh ]
+- [ sh, /var/tmp/elastic_env.sh ]
+- [ sh, /var/tmp/setup_docker.sh ]
+- [ sh, /var/tmp/es_system_check.sh ]
+- [ sh, /var/tmp/elastic_raid0_setup.sh ]
+

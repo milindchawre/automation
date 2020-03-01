@@ -1,0 +1,7 @@
+instances:
+{%for host in groups['all']%}
+  - name: '{{hostvars[host].ansible_hostname}}'
+    ip: [ '{{hostvars[host].ansible_host}}' ]
+{% endfor %}
+  - name: 'kibana'
+    ip: [ '{{ hostvars[groups['elastic'][0]].ansible_host }}' ]
